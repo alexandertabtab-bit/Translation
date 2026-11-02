@@ -1,8 +1,8 @@
 
 import html
 import time
+import requests
 import streamlit as st
-from deep_translator import GoogleTranslator
 
 
 # ---------------- CONFIGURATION ----------------
@@ -22,113 +22,160 @@ LANGS = {
     "Italian": "it",
 }
 
-MAX_CHARS = 20000
-CHUNK_SIZE = 4000
-REQUEST_DELAY = 1.2
+API_URL = "https://api.mymemory.translated.net/get"
+
+MAX_CHARS = 4500
+CHUNK_SIZE = 450
 MAX_RETRIES = 3
 
 
-# ---------------- TEXT PROCESSING ----------------
+# ---------------- TEXT SPLITTING ----------------
 
-def split_text(text, size=CHUNK_SIZE):
-    """Split long text while preserving spaces and line breaks."""
+def split_text(text, max_bytes=CHUNK_SIZE):
+    """Split text without breaking UTF-8 characters."""
 
     chunks = []
 
-    while len(text) > size:
-        cut = text.rfind("\n", 0, size + 1)
+    while text:
+        byte_count = 0
+        cut = 0
+        last_space = 0
 
-        if cut < size // 2:
-            cut = text.rfind(" ", 0, size + 1)
+        for i, char in enumerate(text):
+            char_bytes = len(char.encode("utf-8"))
 
-        if cut <= 0:
-            cut = size
-        else:
-            cut += 1
+            if byte_count + char_bytes > max_bytes:
+                break
+
+            byte_count += char_bytes
+            cut = i + 1
+
+            if char.isspace():
+                last_space = cut
+
+        if cut == len(text):
+            chunks.append(text)
+            break
+
+        if last_space > cut // 2:
+            cut = last_space
+
+        if cut == 0:
+            raise ValueError("Unable to split text safely.")
 
         chunks.append(text[:cut])
         text = text[cut:]
-
-    if text:
-        chunks.append(text)
 
     return chunks
 
 
 # ---------------- TRANSLATION ENGINE ----------------
 
-def translate_chunk(translator, chunk):
-    """Translate one chunk with automatic rate-limit retries."""
+def translate_chunk(chunk, source, target):
+    """Send one translation request with retry handling."""
+
+    params = {
+        "q": chunk,
+        "langpair": f"{source}|{target}",
+        "mt": "1",
+    }
 
     for attempt in range(MAX_RETRIES + 1):
 
         try:
-            result = translator.translate(chunk)
-
-            if result is None:
-                raise ValueError("Google returned an empty response.")
-
-            return result
-
-        except Exception as e:
-
-            is_rate_limit = (
-                "TooManyRequests" in type(e).__name__
-                or "too many requests" in str(e).lower()
-                or "429" in str(e)
+            response = requests.get(
+                API_URL,
+                params=params,
+                timeout=30
             )
 
-            if not is_rate_limit:
-                raise
+            if response.status_code == 429 or response.status_code >= 500:
+
+                if attempt == MAX_RETRIES:
+                    response.raise_for_status()
+
+                time.sleep(2 ** (attempt + 1))
+                continue
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            if str(data.get("responseStatus")) != "200":
+                detail = data.get("responseDetails", "Unknown API error")
+                raise RuntimeError(detail)
+
+            translated = data.get(
+                "responseData", {}
+            ).get("translatedText", "")
+
+            if not translated:
+                raise RuntimeError("Empty translation returned.")
+
+            return translated
+
+        except requests.RequestException:
 
             if attempt == MAX_RETRIES:
-                raise RuntimeError(
-                    "Google Translate is temporarily rate-limiting "
-                    "requests. Please wait a few minutes and try again."
-                ) from e
+                raise
 
-            wait_time = 5 * (2 ** attempt)
-            time.sleep(wait_time)
+            time.sleep(2 ** (attempt + 1))
+
+    raise RuntimeError("Translation service unavailable.")
 
 
 def translate(text, source, target):
-    """Translate complete text in manageable chunks."""
-
-    translator = GoogleTranslator(
-        source=source,
-        target=target
-    )
+    """Translate the complete text in small segments."""
 
     chunks = split_text(text)
-    translated_chunks = []
+    results = []
+
+    progress = st.progress(0)
 
     for index, chunk in enumerate(chunks):
 
-        result = translate_chunk(translator, chunk)
-        translated_chunks.append(result)
+        result = translate_chunk(
+            chunk,
+            source,
+            target
+        )
 
-        # Avoid sending requests too quickly.
+        results.append(result)
+
+        progress.progress((index + 1) / len(chunks))
+
         if index < len(chunks) - 1:
-            time.sleep(REQUEST_DELAY)
+            time.sleep(0.5)
 
-    return "".join(translated_chunks)
+    progress.empty()
+
+    return "".join(results)
 
 
-# ---------------- APPLICATION INTERFACE ----------------
+# ---------------- INTERFACE ----------------
 
 st.title("🌍 Text Translator")
 
 st.caption(
-    "Translate text between Arabic, French, English, "
+    "Translate between Arabic, French, English, "
     "Spanish, German and Italian."
 )
+
+st.info(
+    "Free translation service. Anonymous usage is limited "
+    "to approximately 5,000 characters per day."
+)
+
+
+# ---------------- LANGUAGE SELECTION ----------------
 
 col1, col2 = st.columns(2)
 
 with col1:
     source_name = st.selectbox(
         "From",
-        ["Auto-detect"] + list(LANGS)
+        list(LANGS),
+        index=2
     )
 
 with col2:
@@ -192,7 +239,7 @@ with tab_file:
         text_to_translate = file_text
 
 
-# ---------------- TRANSLATE BUTTON ----------------
+# ---------------- TRANSLATION ----------------
 
 if st.button(
     "Translate",
@@ -204,56 +251,48 @@ if st.button(
 
         st.warning("Please enter text or upload a file.")
 
+    elif source_name == target_name:
+
+        st.info("Source and target languages are identical.")
+
     else:
 
-        source = (
-            "auto"
-            if source_name == "Auto-detect"
-            else LANGS[source_name]
-        )
-
+        source = LANGS[source_name]
         target = LANGS[target_name]
 
-        if source == target:
+        st.session_state.pop("result", None)
 
-            st.info("Source and target languages are identical.")
+        try:
 
-        else:
+            with st.spinner("Translating your text..."):
 
-            st.session_state.pop("result", None)
+                result = translate(
+                    text_to_translate,
+                    source,
+                    target
+                )
 
-            try:
+            if result.strip():
 
-                with st.spinner("Translating..."):
+                st.session_state["result"] = result
+                st.session_state["result_lang"] = target
 
-                    result = translate(
-                        text_to_translate,
-                        source,
-                        target
-                    )
+                st.success("Translation completed!")
 
-                if not result.strip():
+            else:
 
-                    st.error("The translation service returned an empty result.")
+                st.error("The service returned an empty translation.")
 
-                else:
+        except Exception as e:
 
-                    st.session_state["result"] = result
-                    st.session_state["result_lang"] = target
+            st.error("Translation failed.")
 
-                    st.success("Translation completed successfully!")
-
-            except RuntimeError as e:
-
-                st.error(str(e))
-
-            except Exception as e:
-
-                st.error("Translation failed. Please try again.")
-                st.caption(f"Technical detail: {type(e).__name__}: {e}")
+            st.caption(
+                f"Technical detail: {type(e).__name__}: {e}"
+            )
 
 
-# ---------------- DISPLAY RESULT ----------------
+# ---------------- DISPLAY TRANSLATION ----------------
 
 if "result" in st.session_state:
 
@@ -264,6 +303,8 @@ if "result" in st.session_state:
         if st.session_state["result_lang"] == "ar"
         else "ltr"
     )
+
+    alignment = "right" if direction == "rtl" else "left"
 
     safe = html.escape(
         st.session_state["result"]
@@ -276,8 +317,8 @@ if "result" in st.session_state:
             border: 1px solid #8884;
             border-radius: 8px;
             font-size: 1.05rem;
-            line-height: 1.7;
-            text-align: {'right' if direction == 'rtl' else 'left'};
+            line-height: 1.8;
+            text-align: {alignment};
         ">
             {safe}
         </div>
