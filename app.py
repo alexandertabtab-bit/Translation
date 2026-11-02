@@ -1,7 +1,18 @@
 import html
-
+import sys
 import streamlit as st
-from deep_translator import GoogleTranslator
+
+st.write("Python version:", sys.version)
+st.write("Python executable:", sys.executable)
+
+try:
+    import deep_translator
+    st.success("deep-translator is installed!")
+    st.write("Package location:", deep_translator.__file__)
+except ModuleNotFoundError:
+    st.error("deep-translator is NOT installed.")
+import streamlit as st
+
 
 st.set_page_config(page_title="Text Translator", page_icon="🌍", layout="centered")
 
