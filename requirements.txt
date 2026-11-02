@@ -1,2 +1,8 @@
+
 streamlit==1.66.1
 requests
+pypdf
+python-docx
+openpyxl
+python-pptx
+
