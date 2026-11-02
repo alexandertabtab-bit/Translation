@@ -79,10 +79,11 @@ if st.button("Translate", type="primary", use_container_width=True):
             try:
                 with st.spinner("Translating..."):
                     st.session_state["result"] = translate(text_to_translate, source, target)
-                    st.session_state["result_lang"] = target
-            except Exception as e:
-                st.error("Translation failed. Please try again in a moment.")
-                st.caption(f"Technical detail: {e}")
+                    st.session_state["
+                    except Exception as e:
+    st.error("Translation failed")
+    st.exception(e)
+            
 
 if "result" in st.session_state:
     st.subheader("Translation")
