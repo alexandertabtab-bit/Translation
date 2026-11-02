@@ -1,6 +1,7 @@
 import html
 import sys
 import streamlit as st
+from deep_translator import GoogleTranslator
 
 st.write("Python version:", sys.version)
 st.write("Python executable:", sys.executable)
