@@ -67,22 +67,52 @@ with tab_file:
         st.text_area("File preview", file_text, height=150, disabled=True)
         text_to_translate = file_text  # the uploaded file takes priority when present
 
+
 if st.button("Translate", type="primary", use_container_width=True):
     if not text_to_translate.strip():
         st.warning("Please type some text or upload a file first.")
     else:
         source = "auto" if source_name == "Auto-detect" else LANGS[source_name]
         target = LANGS[target_name]
+
         if source == target:
             st.info("The source and target languages are the same.")
         else:
             try:
                 with st.spinner("Translating..."):
-                    st.session_state["result"] = translate(text_to_translate, source, target)
-                    st.session_state["
-                    except Exception as e:
-    st.error("Translation failed")
-    st.exception(e)
+                    result = translate(text_to_translate, source, target)
+
+                if not result or not result.strip():
+                    st.error("The translation service returned an empty result.")
+                else:
+                    st.session_state["result"] = result
+                    st.session_state["result_lang"] = target
+                    st.success("Translation completed!")
+
+            except Exception as e:
+                st.error("Translation failed.")
+                st.exception(e)
+
+if "result" in st.session_state:
+    st.subheader("Translation")
+
+    direction = "rtl" if st.session_state["result_lang"] == "ar" else "ltr"
+    safe = html.escape(st.session_state["result"]).replace("\n", "<br>")
+
+    st.markdown(
+        f'<div dir="{direction}" style="padding:1rem;border:1px solid #8884;'
+        f'border-radius:8px;font-size:1.05rem;line-height:1.7">{safe}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.download_button(
+        "⬇️ Download translation (.txt)",
+        st.session_state["result"],
+        file_name="translation.txt",
+        mime="text/plain",
+    )
+
+                   
             
 
 if "result" in st.session_state:
